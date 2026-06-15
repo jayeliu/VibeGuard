@@ -38,7 +38,9 @@ import (
 	"github.com/inkdust2021/vibeguard/internal/rulelists"
 	"github.com/inkdust2021/vibeguard/internal/secretsources"
 	"github.com/inkdust2021/vibeguard/internal/session"
+	"github.com/inkdust2021/vibeguard/internal/mcp"
 	"github.com/inkdust2021/vibeguard/internal/stream"
+	"github.com/inkdust2021/vibeguard/internal/version"
 	"github.com/inkdust2021/vibeguard/internal/wsproxy"
 	"github.com/inkdust2021/vibeguard/internal/zstd"
 )
@@ -168,6 +170,9 @@ func (s *Server) Start() error {
 	// ServeMux may return a 301 redirect, breaking HTTPS proxy traffic (clients keep reconnecting).
 	// Use a custom router here: only /manager/ goes to the admin UI; everything else goes to the proxy (including CONNECT).
 	adminHandler := s.admin.Handler()
+	mcpServer := mcp.NewServer(s.config, s.admin, version.Version)
+	mcpHandler := mcp.AuthMiddleware(mcpServer.Handler())
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r != nil {
 			if r.URL.Path == "/manager" {
@@ -176,6 +181,10 @@ func (s *Server) Start() error {
 			}
 			if strings.HasPrefix(r.URL.Path, "/manager/") {
 				adminHandler.ServeHTTP(w, r)
+				return
+			}
+			if r.URL.Path == "/mcp" {
+				mcpHandler.ServeHTTP(w, r)
 				return
 			}
 		}
