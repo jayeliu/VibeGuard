@@ -10,6 +10,7 @@ import (
 	"github.com/inkdust2021/vibeguard/internal/admin"
 	"github.com/inkdust2021/vibeguard/internal/cert"
 	"github.com/inkdust2021/vibeguard/internal/config"
+	"github.com/inkdust2021/vibeguard/internal/redact"
 	"github.com/inkdust2021/vibeguard/internal/session"
 )
 
@@ -248,6 +249,265 @@ func TestMcpServer_ToolCallMissingName(t *testing.T) {
 	}
 }
 
+func TestMcpServer_DetectSensitive(t *testing.T) {
+	ResetMcpTokenForTesting()
+	srv := newTestServerWithKeywords(t, map[string]string{"secret": "TEXT"})
+	token, _ := getOrCreateMcpToken()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "detect_sensitive",
+			"arguments": map[string]any{
+				"text": "this is a secret message",
+			},
+		},
+		"id": 1,
+	}
+	resp := postJSON(t, srv, reqBody, token)
+
+	if _, hasError := resp["error"]; hasError {
+		t.Fatalf("unexpected error: %v", resp["error"])
+	}
+	result := resp["result"].(map[string]any)
+	content := result["content"].([]any)
+	textItem := content[0].(map[string]any)
+
+	var detectResult map[string]any
+	json.Unmarshal([]byte(textItem["text"].(string)), &detectResult)
+
+	if detectResult["has_sensitive"] != true {
+		t.Errorf("expected has_sensitive=true, got %v", detectResult["has_sensitive"])
+	}
+	matches := detectResult["matches"].([]any)
+	if len(matches) == 0 {
+		t.Fatal("expected at least one match")
+	}
+	hit := matches[0].(map[string]any)
+	if hit["category"] != "TEXT" {
+		t.Errorf("expected category=TEXT, got %v", hit["category"])
+	}
+	if _, hasOriginal := hit["original"]; hasOriginal {
+		t.Error("expected no original field by default")
+	}
+}
+
+func TestMcpServer_DetectSensitive_WithOriginals(t *testing.T) {
+	ResetMcpTokenForTesting()
+	srv := newTestServerWithKeywords(t, map[string]string{"secret": "TEXT"})
+	token, _ := getOrCreateMcpToken()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "detect_sensitive",
+			"arguments": map[string]any{
+				"text":              "this is a secret message",
+				"include_originals": true,
+			},
+		},
+		"id": 1,
+	}
+	resp := postJSON(t, srv, reqBody, token)
+
+	result := resp["result"].(map[string]any)
+	content := result["content"].([]any)
+	textItem := content[0].(map[string]any)
+
+	var detectResult map[string]any
+	json.Unmarshal([]byte(textItem["text"].(string)), &detectResult)
+
+	matches := detectResult["matches"].([]any)
+	hit := matches[0].(map[string]any)
+	if hit["original"] != "secret" {
+		t.Errorf("expected original=secret, got %v", hit["original"])
+	}
+}
+
+func TestMcpServer_DetectSensitive_NoMatch(t *testing.T) {
+	ResetMcpTokenForTesting()
+	srv := newTestServerWithKeywords(t, map[string]string{"secret": "TEXT"})
+	token, _ := getOrCreateMcpToken()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "detect_sensitive",
+			"arguments": map[string]any{
+				"text": "this is a clean message",
+			},
+		},
+		"id": 1,
+	}
+	resp := postJSON(t, srv, reqBody, token)
+
+	result := resp["result"].(map[string]any)
+	content := result["content"].([]any)
+	textItem := content[0].(map[string]any)
+
+	var detectResult map[string]any
+	json.Unmarshal([]byte(textItem["text"].(string)), &detectResult)
+
+	if detectResult["has_sensitive"] != false {
+		t.Errorf("expected has_sensitive=false, got %v", detectResult["has_sensitive"])
+	}
+}
+
+func TestMcpServer_DetectSensitive_MissingText(t *testing.T) {
+	ResetMcpTokenForTesting()
+	srv := newTestServerWithKeywords(t, nil)
+	token, _ := getOrCreateMcpToken()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "detect_sensitive",
+			"arguments": map[string]any{},
+		},
+		"id": 1,
+	}
+	resp := postJSON(t, srv, reqBody, token)
+
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj["code"] != float64(-32602) {
+		t.Errorf("expected error code -32602, got %v", errObj["code"])
+	}
+}
+
+func TestMcpServer_PreviewRedacted(t *testing.T) {
+	ResetMcpTokenForTesting()
+	srv := newTestServerWithKeywords(t, map[string]string{"secret": "TEXT"})
+	token, _ := getOrCreateMcpToken()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "preview_redacted",
+			"arguments": map[string]any{
+				"text": "this is a secret message",
+			},
+		},
+		"id": 1,
+	}
+	resp := postJSON(t, srv, reqBody, token)
+
+	if _, hasError := resp["error"]; hasError {
+		t.Fatalf("unexpected error: %v", resp["error"])
+	}
+	result := resp["result"].(map[string]any)
+	content := result["content"].([]any)
+	textItem := content[0].(map[string]any)
+
+	var previewResult map[string]any
+	json.Unmarshal([]byte(textItem["text"].(string)), &previewResult)
+
+	if previewResult["match_count"] != float64(1) {
+		t.Errorf("expected match_count=1, got %v", previewResult["match_count"])
+	}
+	redactedText := previewResult["redacted_text"].(string)
+	if redactedText == "this is a secret message" {
+		t.Error("expected text to be redacted, got original")
+	}
+	if !contains(redactedText, "__VG_TEXT_PREVIEW__") {
+		t.Errorf("expected placeholder in redacted text, got %s", redactedText)
+	}
+}
+
+func TestMcpServer_ListKeywords(t *testing.T) {
+	ResetMcpTokenForTesting()
+	srv := newTestServer(t)
+	token, _ := getOrCreateMcpToken()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "list_keywords",
+			"arguments": map[string]any{},
+		},
+		"id": 1,
+	}
+	resp := postJSON(t, srv, reqBody, token)
+
+	if _, hasError := resp["error"]; hasError {
+		t.Fatalf("unexpected error: %v", resp["error"])
+	}
+	result := resp["result"].(map[string]any)
+	content := result["content"].([]any)
+	textItem := content[0].(map[string]any)
+
+	var listResult map[string]any
+	json.Unmarshal([]byte(textItem["text"].(string)), &listResult)
+
+	keywords := listResult["keywords"].([]any)
+	if len(keywords) == 0 {
+		t.Error("expected at least one keyword")
+	}
+	first := keywords[0].(map[string]any)
+	if _, ok := first["keyword"]; !ok {
+		t.Error("expected keyword field")
+	}
+	if _, ok := first["category"]; !ok {
+		t.Error("expected category field")
+	}
+	if _, ok := first["source"]; !ok {
+		t.Error("expected source field")
+	}
+}
+
+func TestMcpServer_ListRuleLists(t *testing.T) {
+	ResetMcpTokenForTesting()
+	srv := newTestServer(t)
+	token, _ := getOrCreateMcpToken()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "list_rule_lists",
+			"arguments": map[string]any{},
+		},
+		"id": 1,
+	}
+	resp := postJSON(t, srv, reqBody, token)
+
+	if _, hasError := resp["error"]; hasError {
+		t.Fatalf("unexpected error: %v", resp["error"])
+	}
+	result := resp["result"].(map[string]any)
+	content := result["content"].([]any)
+	textItem := content[0].(map[string]any)
+
+	var listResult map[string]any
+	json.Unmarshal([]byte(textItem["text"].(string)), &listResult)
+
+	// 默认配置没有 rule lists，但字段应该存在
+	if _, ok := listResult["rule_lists"]; !ok {
+		t.Error("expected rule_lists field")
+	}
+	if _, ok := listResult["count"]; !ok {
+		t.Error("expected count field")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
+}
+
+func containsSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMcpServer_ValidTokenMultipleRequests(t *testing.T) {
 	ResetMcpTokenForTesting()
 	srv := newTestServer(t)
@@ -315,6 +575,11 @@ func TestMcpServer_InvalidToken(t *testing.T) {
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
+	return newTestServerWithKeywords(t, map[string]string{"secret": "TEXT"})
+}
+
+func newTestServerWithKeywords(t *testing.T, keywords map[string]string) *Server {
+	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
@@ -328,7 +593,12 @@ func newTestServer(t *testing.T) *Server {
 	sess := session.NewManager(0, 1000)
 	adm := admin.New(cfg, sess, ca, "", "")
 
-	return NewServer(cfg, adm, "test-version")
+	eng := redact.NewEngine(sess, "__VG_")
+	for kw, cat := range keywords {
+		eng.AddKeyword(kw, cat)
+	}
+
+	return NewServer(cfg, adm, eng, "test-version")
 }
 
 func postJSON(t *testing.T, srv *Server, reqBody map[string]any, token string) map[string]any {

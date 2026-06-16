@@ -9,6 +9,7 @@ import (
 
 	"github.com/inkdust2021/vibeguard/internal/admin"
 	"github.com/inkdust2021/vibeguard/internal/config"
+	"github.com/inkdust2021/vibeguard/internal/redact"
 )
 
 // JSONRPCRequest 表示 MCP JSON-RPC 请求
@@ -49,24 +50,26 @@ const (
 
 // Server 是 VibeGuard MCP Server
 type Server struct {
-	mu       sync.RWMutex
-	version  string
-	name     string
-	cfg      *config.Manager
-	admin    *admin.Admin
-	tools    map[string]ToolHandler
+	mu      sync.RWMutex
+	version string
+	name    string
+	cfg     *config.Manager
+	admin   *admin.Admin
+	engine  *redact.Engine
+	tools   map[string]ToolHandler
 }
 
 // ToolHandler 是一个 MCP 工具处理函数
 type ToolHandler func(params json.RawMessage) (any, error)
 
 // NewServer 创建 MCP Server
-func NewServer(cfg *config.Manager, adm *admin.Admin, version string) *Server {
+func NewServer(cfg *config.Manager, adm *admin.Admin, eng *redact.Engine, version string) *Server {
 	s := &Server{
 		version: version,
 		name:    "vibeguard",
 		cfg:     cfg,
 		admin:   adm,
+		engine:  eng,
 		tools:   make(map[string]ToolHandler),
 	}
 	s.registerTools()
